@@ -70,7 +70,6 @@ ros-jazzy-rmw-cyclonedds-cpp = "*"
 
 [pypi-dependencies]
 crisp_gym = { path = ".", editable = true }
-crisp_python = { path = "../crisp_py", editable = true }
 
 [tasks]
 configure = "bash scripts/configure.sh"
