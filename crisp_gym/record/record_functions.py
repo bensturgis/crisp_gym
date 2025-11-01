@@ -12,9 +12,10 @@ import numpy as np
 import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
-from lerobot.constants import OBS_IMAGES
+from lerobot.constants import OBS_IMAGES, ACTION
 from lerobot.policies.factory import get_policy_class
 from lerobot.policies.utils import populate_queues
+from lerobot.policies.factory import make_pre_post_processors
 
 from crisp_gym.util.control_type import ControlType
 from crisp_gym.util.lerobot_features import numpy_obs_to_torch
@@ -164,6 +165,13 @@ def inference_worker(  # noqa: D417
     policy.reset()
     policy.to(device).eval()
 
+    preprocessor, postprocessor = make_pre_post_processors(
+        policy_cfg=policy_config,
+        pretrained_path=pretrained_path,
+        # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
+        preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
+    )
+
     # Check if not using warmup here makes sense. Normally the policy is reseted multiple times afterwars and warmup should not play a role here
     # warmup_obs_raw = env.observation_space.sample()
     # warmup_obs = numpy_obs_to_torch(warmup_obs_raw,env)
@@ -202,19 +210,32 @@ def inference_worker(  # noqa: D417
             for i in range(n_obs):
                 last= obs_seq[i]
                 batch=numpy_obs_to_torch(last,env)
+                batch=preprocessor(batch)
                 # This mirrors Lerobot `select_action()` pre-processing so queues are filled correctly
-                batch_norm = policy.normalize_inputs(batch)
-                if policy.config.image_features:
-                    batch_norm = dict(batch_norm) # shallow copy then add OBS_IMAGES stack
-                    batch_norm[OBS_IMAGES] = torch.stack(
-                        [batch_norm[k] for k in policy.config.image_features], dim=-4
-                    )
+                #
+                # This was used in the old Lerobot Version
+                # batch_norm = policy.normalize_inputs(batch)
+                # if policy.config.image_features:
+                #     batch_norm = dict(batch_norm) # shallow copy then add OBS_IMAGES stack
+                #     batch_norm[OBS_IMAGES] = torch.stack(
+                #         [batch_norm[k] for k in policy.config.image_features], dim=-4
+                #     )
                 # Note: It's important that this happens after stacking the images into a single key.
-                policy._queues = populate_queues(policy._queues, batch_norm)
+                #policy._queues = populate_queues(policy._queues, batch_norm)
 
             # Now get a fresh chunk
-            chunk = policy.predict_action_chunk(batch_norm)  
-            chunk = chunk.squeeze(0).to(device="cpu").numpy()
+            chunk = policy.predict_action_chunk(batch)  
+            chunk = chunk.transpose(0, 1)[: policy.config.n_action_steps]
+
+            processed_chunk = []
+            for t in range(chunk.shape[0]):
+                action_t = postprocessor(chunk[t])              
+                action_t = action_t.squeeze(0).to("cpu").numpy() 
+                processed_chunk.append(action_t)
+
+            # Stack all actions into a single numpy array
+            chunk = np.stack(processed_chunk, axis=0)
+
 
         logging.debug(f"[Inference] Computed chunk with shape {tuple(chunk.shape)}")
         conn.send(chunk)

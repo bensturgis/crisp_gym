@@ -137,7 +137,7 @@ def numpy_obs_to_torch(obs: Dict[str, Any], env) -> Dict[str, Any]:
         "observation.state": torch.from_numpy(state)
             .unsqueeze(0)
             .to(device=device, dtype=torch.float32),
-        "task": "", # TODO: Add task description if needed
+        "task": "Pick the block.", # TODO: Add task description if needed
     }
     for cam in env.cameras:
         img = obs[f"{cam.config.camera_name}_image"]
