@@ -43,6 +43,7 @@ lerobot = { path = "../lerobot", editable = true, extras = ["smolvla", "libero",
 rich = ">=14.0.0, <15"
 
 [feature.lerobot.dependencies]
+numpy = ">=1.26,<2.0"
 pynput = "*"
 rerun-sdk = "==0.22.0"
 
