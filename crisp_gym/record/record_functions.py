@@ -5,17 +5,23 @@ This module should be used in conjunction with the `RecordingManager` class.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
-from lerobot.constants import OBS_IMAGES, ACTION
-from lerobot.policies.factory import get_policy_class
-from lerobot.policies.utils import populate_queues
-from lerobot.policies.factory import make_pre_post_processors
+from lerobot.fiper_data_recorder.configuration_fiper_data_recorder import FiperDataRecorderConfig
+from lerobot.policies.factory import (
+    get_policy_class,
+    make_pre_post_processors,
+)
+from lerobot.uncertainty.uncertainty_scoring.scorer_artifacts import (
+    build_scorer_artifacts_for_fiper_recorder,
+)
 
 from crisp_gym.util.control_type import ControlType
 from crisp_gym.util.lerobot_features import numpy_obs_to_torch
@@ -113,14 +119,15 @@ def make_teleop_fn(env: ManipulatorBaseEnv, leader: TeleopRobot) -> Callable:
     return _fn
 
 
-def inference_worker(  # noqa: D417
+def inference_worker(
     conn: Connection,
     pretrained_path: str,
     env: ManipulatorBaseEnv,
-    steps: int| None,
+    steps: int | None,
     inpainting: bool,
     replan_time: int,
-):  # noqa: ANN001
+    fiper_recorder_config: FiperDataRecorderConfig | None = None,
+):
     """Policy inference process: loads policy on GPU, receives observations via conn, returns actions, and exits on None.
 
     Args:
@@ -131,17 +138,8 @@ def inference_worker(  # noqa: D417
         inpainting (bool): Wether to use inpainting in the prediction of a new chunk or not 
         replan_time (int): After how many steps to start predicting a new action chunk 
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_config = TrainPipelineConfig.from_pretrained(pretrained_path)
-    if train_config.policy is None:
-        raise ValueError(
-            f"Policy configuration is missing in the pretrained path: {pretrained_path}. "
-            "Please ensure the policy is correctly configured."
-        )
-    policy_cls = get_policy_class(train_config.policy.type)
-
-    policy_config = PreTrainedConfig.from_pretrained(pretrained_path)
-    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")    
+    policy_config = PreTrainedConfig.from_pretrained(pretrained_path)    
     if steps is not None:
         # Check if the number of steps make sense 
         horizon=policy_config.horizon
@@ -155,8 +153,14 @@ def inference_worker(  # noqa: D417
     if inpainting is True:
         policy_config.inpainting_lengh = max(0, int(policy_config.n_action_steps) - int(replan_time))
     
-    policy = policy_cls.from_pretrained(pretrained_path,config=policy_config)
-
+    if Path(pretrained_path).is_dir():
+        config_path = Path(pretrained_path) / "train_config.json"
+    elif Path(pretrained_path).is_file():
+        config_path = Path(pretrained_path)
+    with open(config_path, "r") as f:
+        policy_type = json.load(f)["policy"]["type"] 
+    policy_cls = get_policy_class(policy_type)
+    policy = policy_cls.from_pretrained(pretrained_path, config=policy_config)
 
     logging.info(
         f"[Inference] Loaded {policy.name} policy with {pretrained_path} on device {device}."
@@ -172,24 +176,28 @@ def inference_worker(  # noqa: D417
         preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
     )
 
-    # Check if not using warmup here makes sense. Normally the policy is reseted multiple times afterwars and warmup should not play a role here
-    # warmup_obs_raw = env.observation_space.sample()
-    # warmup_obs = numpy_obs_to_torch(warmup_obs_raw,env)
+    warmup_obs_raw = env.observation_space.sample()
+    warmup_obs = numpy_obs_to_torch(warmup_obs_raw)
 
-    # with torch.inference_mode():
-    #     _ = policy.select_action(warmup_obs)
-    #     torch.cuda.synchronize()
+    with torch.inference_mode():
+        _ = policy.select_action(warmup_obs)
+        torch.cuda.synchronize()
 
-    # logging.info("[Inference] Warm-up complete")
+    logging.info("[Inference] Warm-up complete")
 
+    if fiper_recorder_config is not None:
+        scorer_artifacts = build_scorer_artifacts_for_fiper_recorder(
+            fiper_data_recorder_cfg=fiper_recorder_config,
+            policy_cfg=policy_config,
+            env_cfg=cfg.env,
+            dataset_cfg=cfg.dataset,
+            policy=policy,
+            preprocessor=preprocessor,
+        )
 
-    # Read policy config to know obs/action window sizes
-    cfg = policy.config
-    n_obs = int(cfg.n_obs_steps)
-    print("Ready to recive information")
-
+    logging.info("Ready to recive information")
     while True:
-        # Check if messages are recieved correctly
+        # Check if messages have been received correctly
         msg = conn.recv()
         if msg is None:
             break
@@ -201,44 +209,27 @@ def inference_worker(  # noqa: D417
             logging.warning(f"[Inference] Unknown message: {type(msg)}")
             continue
         
-        # We are recieving a list of dictonaries with the last observations 
+        # We are receiving a list of dictonaries with the last observations 
         obs_seq = msg["obs_seq"]
 
         # Make the policy predict an action chunk for the current obeservation.
         # Therefore we follow the implementation on the Lerobot side for select_action() which calls predict_action_chunk()
         with torch.inference_mode():
-            for i in range(n_obs):
-                last= obs_seq[i]
-                batch=numpy_obs_to_torch(last,env)
-                batch=preprocessor(batch)
-                # This mirrors Lerobot `select_action()` pre-processing so queues are filled correctly
-                #
-                # This was used in the old Lerobot Version
-                # batch_norm = policy.normalize_inputs(batch)
-                # if policy.config.image_features:
-                #     batch_norm = dict(batch_norm) # shallow copy then add OBS_IMAGES stack
-                #     batch_norm[OBS_IMAGES] = torch.stack(
-                #         [batch_norm[k] for k in policy.config.image_features], dim=-4
-                #     )
-                # Note: It's important that this happens after stacking the images into a single key.
-                #policy._queues = populate_queues(policy._queues, batch_norm)
+            for i in range(policy.config.n_obs_steps):
+                obs = numpy_obs_to_torch(obs=obs_seq[i], env=env)
+                obs = preprocessor(obs)
 
             # Now get a fresh chunk
-            chunk = policy.predict_action_chunk(batch)  
-            chunk = chunk.transpose(0, 1)[: policy.config.n_action_steps]
+            actions = policy.predict_action_chunk(obs)  
+            actions = actions.transpose(0, 1)[: policy.config.n_action_steps]
 
-            processed_chunk = []
-            for t in range(chunk.shape[0]):
-                action_t = postprocessor(chunk[t])              
-                action_t = action_t.squeeze(0).to("cpu").numpy() 
-                processed_chunk.append(action_t)
+        actions = np.stack(
+            [postprocessor(a).squeeze(0).to("cpu").numpy() for a in actions],
+            axis=0
+        )
 
-            # Stack all actions into a single numpy array
-            chunk = np.stack(processed_chunk, axis=0)
-
-
-        logging.debug(f"[Inference] Computed chunk with shape {tuple(chunk.shape)}")
-        conn.send(chunk)
+        logging.debug(f"[Inference] Computed action chunk with shape {tuple(actions.shape)}")
+        conn.send(actions)
 
     conn.close()
     logging.info("[Inference] Worker shutting down")

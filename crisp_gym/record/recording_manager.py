@@ -332,7 +332,9 @@ class RecordingManager(ABC):
 
         self._handle_post_episode()
 
-    def record_episode_inference(self, on_start, on_end, env, conn, replan_time, n_obs, n_act, task: str = "task"):  # noqa: ANN001, D102
+    def record_episode_inference(  # noqa: D102
+            self, on_start, on_end, env, conn, replan_time, n_obs, n_act, task: str = "task", episode_len: int | None = None,  # noqa: ANN001
+    ):
         try:
             self._wait_for_start_signal()
         except StopIteration:
@@ -360,13 +362,14 @@ class RecordingManager(ABC):
         
         i = 0
         next_chunk = None
+        steps_done = 0
 
         while self.state == "recording":
             frame_start = time.time()
             # load a new chunk when an old chunk is finished
-            if i==0:
+            if i == 0:
                 # Edge case when we want to make a new prediction after all action chunks have been used up  
-                if n_act==replan_time:
+                if n_act == replan_time:
                     obs_buf.append(env._get_obs())
                     conn.send({"type": "OBS_SEQ", "obs_seq": list(obs_buf)})
                     print("Starting new inference_1")
@@ -374,10 +377,9 @@ class RecordingManager(ABC):
                 current_chunk = next_chunk[n_act-replan_time:] 
                 print ("Length ot the new current chunk:",len(current_chunk))
 
-
             # execute action
             action = current_chunk[i]
-            print("Process element:",i)
+            print("Process element:", i)
             try:
                 obs, *_ = env.step(action, block=False)
                 obs_buf.append(obs)
@@ -386,15 +388,22 @@ class RecordingManager(ABC):
                 break
 
             # Start prediction
-            if i ==(2*replan_time-n_act):
-                    conn.send({"type": "OBS_SEQ", "obs_seq": list(obs_buf)})
-                    print("Starting new inference_2")
+            if i == (2 * replan_time-n_act):
+                conn.send({"type": "OBS_SEQ", "obs_seq": list(obs_buf)})
+                print("Starting new inference_2")
 
             # push frame to writer
             self.queue.put({"type": "FRAME", "data": (obs, action, task)})
 
             # step done
             i += 1
+            steps_done += 1
+
+            # auto-stop after N steps
+            if episode_len is not None and steps_done >= episode_len:
+                logger.info(f"Auto-stopping episode after {steps_done} steps.")
+                self.state = "paused"
+                break 
 
             # when done with one episode reset the counter
             if i >= (len(current_chunk)):

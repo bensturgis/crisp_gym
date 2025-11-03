@@ -97,21 +97,18 @@ parser.add_argument(
     default=None,
     help="Namespace for the follower robot. This is used to identify the robot in the ROS ecosystem.",
 )
-
 parser.add_argument(
    "--async-inference",
     type=int,
     default=None,
     help="At which step to start a new prediction during the execution of one chunk. The resulting chunk will be shorter for consitency.",
 )
-
 parser.add_argument(
    "--inference-steps",
     type=int,
     default=None,
     help="How many steps should the policy execute from its prediciton",
 )
-
 parser.add_argument(
     "--inpainting",
     action=argparse.BooleanOptionalAction,   # supports --inpainting / --no-inpainting
@@ -179,7 +176,6 @@ env.robot.config.home_config= home_close_to_table
 
 # %% Prepare the dataset
 features = get_features(env.config, ctrl_type=ctrl_type)
-
 
 recording_manager = make_recording_manager(
     recording_manager_type=args.recording_manager_type,
