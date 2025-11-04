@@ -22,6 +22,7 @@ from lerobot.policies.factory import (
 from lerobot.uncertainty.uncertainty_scoring.scorer_artifacts import (
     build_scorer_artifacts_for_fiper_recorder,
 )
+from util.fiper_utils import next_fiper_episode_index
 
 from crisp_gym.util.control_type import ControlType
 from crisp_gym.util.lerobot_features import numpy_obs_to_torch
@@ -118,8 +119,7 @@ def make_teleop_fn(env: ManipulatorBaseEnv, leader: TeleopRobot) -> Callable:
 
     return _fn
 
-
-def inference_worker(
+def inference_worker(  # noqa: D417
     conn: Connection,
     pretrained_path: str,
     env: ManipulatorBaseEnv,
@@ -127,6 +127,7 @@ def inference_worker(
     inpainting: bool,
     replan_time: int,
     fiper_recorder_config: FiperDataRecorderConfig | None = None,
+    fiper_output_dir: Path | None = None,
 ):
     """Policy inference process: loads policy on GPU, receives observations via conn, returns actions, and exits on None.
 
@@ -142,7 +143,7 @@ def inference_worker(
     policy_config = PreTrainedConfig.from_pretrained(pretrained_path)    
     if steps is not None:
         # Check if the number of steps make sense 
-        horizon=policy_config.horizon
+        horizon = policy_config.chunk_size
         if steps >= horizon: 
             raise ValueError(
             f"The policy steps={steps} must be smaller than the horizon={horizon}."
@@ -188,14 +189,15 @@ def inference_worker(
     if fiper_recorder_config is not None:
         scorer_artifacts = build_scorer_artifacts_for_fiper_recorder(
             fiper_data_recorder_cfg=fiper_recorder_config,
-            policy_cfg=policy_config,
-            env_cfg=cfg.env,
-            dataset_cfg=cfg.dataset,
             policy=policy,
             preprocessor=preprocessor,
         )
+        policy.init_fiper_data_recorder(
+            fiper_data_recorder_cfg=fiper_recorder_config,
+            scorer_artifacts=scorer_artifacts,
+        )
 
-    logging.info("Ready to recive information")
+    logging.info("Ready to receive information")
     while True:
         # Check if messages have been received correctly
         msg = conn.recv()
@@ -207,6 +209,27 @@ def inference_worker(
             continue
         if not (isinstance(msg, dict) and msg.get("type") == "OBS_SEQ"):
             logging.warning(f"[Inference] Unknown message: {type(msg)}")
+            continue
+        if isinstance(msg, dict) and msg.get("type") == "SAVE_FIPER":
+            if policy.fiper_data_recorder is None:
+                logging.warning("[Inference] SAVE_FIPER received but no recorder attached.")
+                continue
+            ep_metadata = msg.get("metadata", {}).copy()
+            ep_metadata.update(
+                episode=next_fiper_episode_index(output_dir=(fiper_output_dir / ep_metadata.rollout_type)),
+                action_prediction_horizon=policy_config.chunk_size,
+                action_execution_horizon=policy_config.n_action_steps,
+                action_batch_size=fiper_recorder_config.num_uncertainty_sequences,
+            )
+            policy.fiper_data_recorder.save_data(output_dir=fiper_output_dir, episode_metadata=ep_metadata)
+            logging.info(f"[Inference] Saved FIPER data to {fiper_output_dir} (episode {ep_metadata.get('episode')}).")
+            continue
+        if isinstance(msg, dict) and msg.get("type") == "DELETE_FIPER":
+            if policy.fiper_data_recorder is None:
+                logging.warning("[Inference] DELETE_FIPER received but no recorder attached.")
+                continue
+            policy.fiper_data_recorder.reset()
+            logging.info("[Inference] Deleted FIPER rollout buffer.")
             continue
         
         # We are receiving a list of dictonaries with the last observations 

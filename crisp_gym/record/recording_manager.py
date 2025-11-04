@@ -8,12 +8,10 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 import rclpy
-
-# TODO: make this optional, we do not want to depend on lerobot
 from lerobot.constants import HF_LEROBOT_HOME
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from pynput import keyboard
@@ -22,6 +20,8 @@ from rich import print
 from rich.panel import Panel
 from std_msgs.msg import String
 from typing_extensions import override
+
+from crisp_gym.util import prompt
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ class RecordingManager(ABC):
         num_episodes: int = 3,
         push_to_hub: bool = False,
         use_sound: bool = True,
+        fiper_recording_enabled: bool = False,
     ) -> None:
         """Initialize the recording manager.
 
@@ -64,6 +65,7 @@ class RecordingManager(ABC):
         self.num_episodes = num_episodes
         self.push_to_hub = push_to_hub
         self.use_sound = use_sound
+        self.fiper_recording_enabled = fiper_recording_enabled
         self.episode_count = 0
 
         # TODO: do not hardcode the queue size, make it configurable
@@ -333,7 +335,7 @@ class RecordingManager(ABC):
         self._handle_post_episode()
 
     def record_episode_inference(  # noqa: D102
-            self, on_start, on_end, env, conn, replan_time, n_obs, n_act, task: str = "task", episode_len: int | None = None,  # noqa: ANN001
+        self, on_start, on_end, env, conn, replan_time, n_obs, n_act, task: str = "task", episode_len: int | None = None,  # noqa: ANN001
     ):
         try:
             self._wait_for_start_signal()
@@ -425,7 +427,27 @@ class RecordingManager(ABC):
         if on_end:
             on_end()
 
-        self._handle_post_episode()
+        def _on_save_fiper() -> bool:
+            metadata = self._collect_fiper_metadata()
+            if metadata is None:
+                return False
+            conn.send({
+                "type": "SAVE_FIPER",
+                "metadata": metadata,
+            })
+            return True
+
+        def _on_delete_fiper():
+            conn.send({"type": "DELETE_FIPER"})
+
+        if self.fiper_recording_enabled:
+            on_save = _on_save_fiper
+            on_delete = _on_delete_fiper
+        else:
+            on_save = None
+            on_delete = None
+
+        self._handle_post_episode(on_save=on_save, on_delete=on_delete)
         
     def _wait_for_start_signal(self) -> None:
         """Wait until the recording state is set to 'recording'."""
@@ -435,7 +457,42 @@ class RecordingManager(ABC):
                 raise StopIteration
             time.sleep(0.05)
 
-    def _handle_post_episode(self) -> None:
+    def _collect_fiper_metadata(self) -> dict[str, Any] | None:
+        outcome = prompt.prompt(
+            "Was this episode a success or failure?",
+            options=["success", "failure"],
+        ).lower()
+        rollout_type = prompt.prompt(
+            "Was this a calibration or test episode?",
+            options=["calibration", "test"],
+        ).lower()
+        rollout_subtype = prompt.prompt(
+            "Was this episode in-distribution or out-of-distribution?",
+            options=["id", "ood"],
+        ).lower()
+        if rollout_type == "calibration" and not (rollout_subtype == "id" and outcome == "success"):
+            logger.warning(
+                "Not saving: Calibration episodes should be in-distribution and successful."
+            )
+            return None
+        
+        if rollout_type == "calibration":
+            rollout_subtype = "ca"
+
+        return {
+            "metadata": True,
+            "task": "lego_stacking",
+            "successful": (outcome == "success"),
+            "task_id": 0,
+            "rollout_type": rollout_type,
+            "rollout_subtype": rollout_subtype,
+        }
+
+    def _handle_post_episode(
+        self,
+        on_save: Callable[[], bool] | None = None,
+        on_delete: Callable[[], None] | None = None,
+    ) -> None:
         """Handle the state after recording an episode."""
         if self.state == "paused":
             logger.info("Paused. Awaiting user decision to save/delete...")
@@ -443,13 +500,25 @@ class RecordingManager(ABC):
                 time.sleep(0.5)
 
         if self.state == "to_be_saved":
-            logger.info("Saving current episode.")
-            self.queue.put({"type": "SAVE_EPISODE"})
-            self.episode_count += 1
-            self._set_to_wait()
+            allow_save = True
+            if on_save is not None:
+                allow_save = on_save()
+            if allow_save:
+                logger.info("Saving current episode.")
+                self.queue.put({"type": "SAVE_EPISODE"})
+                self.episode_count += 1
+                self._set_to_wait()
+            else:
+                logger.info("Converting save to delete per gating rules.")
+                self.queue.put({"type": "DELETE_EPISODE"})
+                if on_delete:
+                    on_delete()
+                self._set_to_wait()
         elif self.state == "to_be_deleted":
             logger.info("Deleting current episode.")
             self.queue.put({"type": "DELETE_EPISODE"})
+            if on_delete:
+                on_delete()
             self._set_to_wait()
         elif self.state == "exit":
             pass

@@ -1,0 +1,13 @@
+domains: [id, ood]
+num_uncertainty_sequences: 64
+scoring_metrics: [mode_distance]
+ode_eval_times: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+terminal_vel_eval_times: [0, 0.05, 0.1, 0.15, 0.2, 0.25]
+ensemble_model_paths: [
+  /home/bensturgis/thesis/repos/lerobot/outputs/train/smolvla/lego_stacking_02/checkpoints/050000/pretrained_model,
+  /home/bensturgis/thesis/repos/lerobot/outputs/train/smolvla/lego_stacking_03/checkpoints/050000/pretrained_model
+]
+laplace_config:
+  scopes: [action_out_proj]
+  calib_fraction: 1.0
+  num_samples: 4

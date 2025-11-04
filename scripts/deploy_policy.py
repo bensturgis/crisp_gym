@@ -4,6 +4,7 @@ import argparse
 import logging
 import time
 from multiprocessing import Pipe, Process
+from pathlib import Path
 
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.policies.factory import get_policy_class
@@ -15,6 +16,7 @@ from crisp_gym.manipulator_env_config import list_env_configs
 from crisp_gym.record.record_functions import inference_worker
 from crisp_gym.record.recording_manager import make_recording_manager
 from crisp_gym.util import prompt
+from crisp_gym.util.fiper_utils import load_fiper_recorder_config
 from crisp_gym.util.lerobot_features import get_features
 from crisp_gym.util.setup_logger import setup_logging
 
@@ -58,7 +60,7 @@ parser.add_argument(
 parser.add_argument(
     "--push-to-hub",
     action=argparse.BooleanOptionalAction,
-    default=True,
+    default=False,
     help="Whether to push the dataset to the Hugging Face Hub.",
 )
 parser.add_argument(
@@ -98,6 +100,12 @@ parser.add_argument(
     help="Namespace for the follower robot. This is used to identify the robot in the ROS ecosystem.",
 )
 parser.add_argument(
+    "--episode_length",
+    type=int,
+    default=None,
+    help="Auto-stop an episode after this many environment steps."
+)
+parser.add_argument(
    "--async-inference",
     type=int,
     default=None,
@@ -114,6 +122,18 @@ parser.add_argument(
     action=argparse.BooleanOptionalAction,   # supports --inpainting / --no-inpainting
     default=False,
     help="Use executed actions as prefix during denoising in async mode."
+)
+parser.add_argument(
+    "--fiper-config",
+    type=str,
+    default=None,
+    help="Path to a FIPER data recorder config file.",
+)
+parser.add_argument(
+    "--fiper-output-dir",
+    type=str,
+    default=None,
+    help="Directory to store FIPER rollout files.",
 )
 
 args = parser.parse_args()
@@ -170,9 +190,14 @@ if args.async_inference is None:
     )
     logging.info(f"Using async inference at: {args.async_inference}")
 
+fiper_recorder_config = None
+if args.fiper_config is not None:
+    fiper_recorder_config = load_fiper_recorder_config(args.fiper_config)
+    logging.info(f"Loaded FIPER config from {args.fiper_config}")
+
 ctrl_type = "cartesian" if not args.joint_control else "joint"
 env = make_env(args.env_config, control_type=ctrl_type, namespace=args.env_namespace)
-env.robot.config.home_config= home_close_to_table
+env.robot.config.home_config = home_close_to_table
 
 # %% Prepare the dataset
 features = get_features(env.config, ctrl_type=ctrl_type)
@@ -203,6 +228,8 @@ inf_proc = Process(
         "steps": args.inference_steps,
         "inpainting": args.inpainting,
         "replan_time": args.async_inference, 
+        "fiper_recorder_config": fiper_recorder_config,
+        "fiper_output_dir": Path(args.fiper_output_dir),
     },
     daemon=True,
 )
@@ -280,6 +307,7 @@ with recording_manager:
             replan_time=replan_time,
             n_obs=n_obs,
             n_act=n_act,
+            episode_len=args.episode_length,
         )
 
         logging.info("Episode finished. Waiting for the next episode to start.")
