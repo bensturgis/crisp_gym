@@ -22,7 +22,7 @@ from lerobot.policies.factory import (
 from lerobot.uncertainty.uncertainty_scoring.scorer_artifacts import (
     build_scorer_artifacts_for_fiper_recorder,
 )
-from util.fiper_utils import next_fiper_episode_index
+from crisp_gym.util.fiper_utils import next_fiper_episode_index
 
 from crisp_gym.util.control_type import ControlType
 from crisp_gym.util.lerobot_features import numpy_obs_to_torch
@@ -140,7 +140,8 @@ def inference_worker(  # noqa: D417
         replan_time (int): After how many steps to start predicting a new action chunk 
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")    
-    policy_config = PreTrainedConfig.from_pretrained(pretrained_path)    
+    policy_config = PreTrainedConfig.from_pretrained(pretrained_path) 
+    policy_config.pretrained_path = pretrained_path   
     if steps is not None:
         # Check if the number of steps make sense 
         horizon = policy_config.chunk_size
@@ -178,7 +179,8 @@ def inference_worker(  # noqa: D417
     )
 
     warmup_obs_raw = env.observation_space.sample()
-    warmup_obs = numpy_obs_to_torch(warmup_obs_raw)
+    warmup_obs = numpy_obs_to_torch(warmup_obs_raw, env=env)
+    warmup_obs = preprocessor(warmup_obs)
 
     with torch.inference_mode():
         _ = policy.select_action(warmup_obs)
@@ -193,7 +195,7 @@ def inference_worker(  # noqa: D417
             preprocessor=preprocessor,
         )
         policy.init_fiper_data_recorder(
-            fiper_data_recorder_cfg=fiper_recorder_config,
+            config=fiper_recorder_config,
             scorer_artifacts=scorer_artifacts,
         )
 
@@ -207,16 +209,13 @@ def inference_worker(  # noqa: D417
             logging.info("[Inference] Resetting policy")
             policy.reset()
             continue
-        if not (isinstance(msg, dict) and msg.get("type") == "OBS_SEQ"):
-            logging.warning(f"[Inference] Unknown message: {type(msg)}")
-            continue
         if isinstance(msg, dict) and msg.get("type") == "SAVE_FIPER":
             if policy.fiper_data_recorder is None:
                 logging.warning("[Inference] SAVE_FIPER received but no recorder attached.")
                 continue
             ep_metadata = msg.get("metadata", {}).copy()
             ep_metadata.update(
-                episode=next_fiper_episode_index(output_dir=(fiper_output_dir / ep_metadata.rollout_type)),
+                episode=next_fiper_episode_index(output_dir=(fiper_output_dir / ep_metadata["rollout_type"])),
                 action_prediction_horizon=policy_config.chunk_size,
                 action_execution_horizon=policy_config.n_action_steps,
                 action_batch_size=fiper_recorder_config.num_uncertainty_sequences,
@@ -230,6 +229,9 @@ def inference_worker(  # noqa: D417
                 continue
             policy.fiper_data_recorder.reset()
             logging.info("[Inference] Deleted FIPER rollout buffer.")
+            continue
+        if not (isinstance(msg, dict) and msg.get("type") == "OBS_SEQ"):
+            logging.warning(f"[Inference] Unknown message: {type(msg)}")
             continue
         
         # We are receiving a list of dictonaries with the last observations 

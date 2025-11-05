@@ -1,7 +1,15 @@
 """Prompt utility for user input in command-line applications."""
 
 import logging
+import sys
+import termios
 
+
+def drain_stdin() -> None:
+    """Clear any pending keyboard input so the next input() is clean."""
+    if sys.stdin.isatty():
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        return
 
 def prompt(
     message: str = "Choose an option:",
@@ -18,6 +26,8 @@ def prompt(
     Returns:
         str: The selected or entered string.
     """
+    drain_stdin()
+    
     logging.info("-" * 40)
     if options:
         logging.info(message)

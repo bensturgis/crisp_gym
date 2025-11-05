@@ -1,6 +1,7 @@
 import logging
 import re  # noqa: D100
 from pathlib import Path
+from typing import Any
 
 import yaml
 from lerobot.fiper_data_recorder.configuration_fiper_data_recorder import (
@@ -8,6 +9,9 @@ from lerobot.fiper_data_recorder.configuration_fiper_data_recorder import (
     LaplaceConfig,
     LikelihoodODESolverConfig,
 )
+from crisp_gym.util import prompt
+
+logger = logging.getLogger(__name__)
 
 
 def load_fiper_recorder_config(config_path: Path) -> FiperDataRecorderConfig:  # noqa: D103
@@ -50,3 +54,34 @@ def next_fiper_episode_index(output_dir: Path) -> int:  # noqa: D103
                 max_idx = idx
 
     return max_idx + 1
+
+def collect_fiper_metadata() -> dict[str, Any] | None:
+    outcome = prompt.prompt(
+        "Was this episode a success or failure?",
+        options=["success", "failure"],
+    ).lower()
+    rollout_type = prompt.prompt(
+        "Was this a calibration or test episode?",
+        options=["calibration", "test"],
+    ).lower()
+    rollout_subtype = prompt.prompt(
+        "Was this episode in-distribution or out-of-distribution?",
+        options=["id", "ood"],
+    ).lower()
+    if rollout_type == "calibration" and not (rollout_subtype == "id" and outcome == "success"):
+        logger.warning(
+            "Not saving: Calibration episodes should be in-distribution and successful."
+        )
+        return None
+    
+    if rollout_type == "calibration":
+        rollout_subtype = "ca"
+
+    return {
+        "metadata": True,
+        "task": "lego_stacking",
+        "successful": (outcome == "success"),
+        "task_id": 0,
+        "rollout_type": rollout_type,
+        "rollout_subtype": rollout_subtype,
+    }

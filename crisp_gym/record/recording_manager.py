@@ -19,9 +19,8 @@ from rclpy.executors import SingleThreadedExecutor
 from rich import print
 from rich.panel import Panel
 from std_msgs.msg import String
+from crisp_gym.util.fiper_utils import collect_fiper_metadata
 from typing_extensions import override
-
-from crisp_gym.util import prompt
 
 logger = logging.getLogger(__name__)
 
@@ -423,12 +422,13 @@ class RecordingManager(ABC):
             logger.debug(f"Finished sleeping for {sleep_time:.3f} seconds.")
 
         logger.debug("Finished recording...")
+        logger.info(f"Number of episode steps: {steps_done}")
 
         if on_end:
             on_end()
 
         def _on_save_fiper() -> bool:
-            metadata = self._collect_fiper_metadata()
+            metadata = collect_fiper_metadata()
             if metadata is None:
                 return False
             conn.send({
@@ -456,37 +456,6 @@ class RecordingManager(ABC):
             if self.state == "exit":
                 raise StopIteration
             time.sleep(0.05)
-
-    def _collect_fiper_metadata(self) -> dict[str, Any] | None:
-        outcome = prompt.prompt(
-            "Was this episode a success or failure?",
-            options=["success", "failure"],
-        ).lower()
-        rollout_type = prompt.prompt(
-            "Was this a calibration or test episode?",
-            options=["calibration", "test"],
-        ).lower()
-        rollout_subtype = prompt.prompt(
-            "Was this episode in-distribution or out-of-distribution?",
-            options=["id", "ood"],
-        ).lower()
-        if rollout_type == "calibration" and not (rollout_subtype == "id" and outcome == "success"):
-            logger.warning(
-                "Not saving: Calibration episodes should be in-distribution and successful."
-            )
-            return None
-        
-        if rollout_type == "calibration":
-            rollout_subtype = "ca"
-
-        return {
-            "metadata": True,
-            "task": "lego_stacking",
-            "successful": (outcome == "success"),
-            "task_id": 0,
-            "rollout_type": rollout_type,
-            "rollout_subtype": rollout_subtype,
-        }
 
     def _handle_post_episode(
         self,

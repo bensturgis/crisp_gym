@@ -48,7 +48,7 @@ parser.add_argument(
 parser.add_argument(
     "--num-episodes",
     type=int,
-    default=10,
+    default=1000,
     help="Number of episodes to record",
 )
 parser.add_argument(
@@ -192,8 +192,11 @@ if args.async_inference is None:
 
 fiper_recorder_config = None
 if args.fiper_config is not None:
-    fiper_recorder_config = load_fiper_recorder_config(args.fiper_config)
+    fiper_recorder_config = load_fiper_recorder_config(config_path=Path(args.fiper_config))
     logging.info(f"Loaded FIPER config from {args.fiper_config}")
+fiper_output_dir = None
+if args.fiper_output_dir is not None:
+    fiper_output_dir = Path(args.fiper_output_dir)
 
 ctrl_type = "cartesian" if not args.joint_control else "joint"
 env = make_env(args.env_config, control_type=ctrl_type, namespace=args.env_namespace)
@@ -210,6 +213,7 @@ recording_manager = make_recording_manager(
     num_episodes=args.num_episodes,
     fps=args.fps,
     resume=args.resume,
+    fiper_recording_enabled=(fiper_recorder_config is not None),
 )
 recording_manager.wait_until_ready()
 
@@ -229,7 +233,7 @@ inf_proc = Process(
         "inpainting": args.inpainting,
         "replan_time": args.async_inference, 
         "fiper_recorder_config": fiper_recorder_config,
-        "fiper_output_dir": Path(args.fiper_output_dir),
+        "fiper_output_dir": fiper_output_dir,
     },
     daemon=True,
 )
