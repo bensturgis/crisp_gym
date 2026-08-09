@@ -14,17 +14,16 @@ import numpy as np
 import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
-from lerobot.fiper_data_recorder.configuration_fiper_data_recorder import FiperDataRecorderConfig
+from lerobot.fiper.data_generation.configuration_fiper_rollout_recorder import (
+    FiperRolloutRecorderConfig,
+)
 from lerobot.policies.factory import (
     get_policy_class,
     make_pre_post_processors,
 )
-from lerobot.uncertainty.uncertainty_scoring.scorer_artifacts import (
-    build_scorer_artifacts_for_fiper_recorder,
-)
-from crisp_gym.util.fiper_utils import next_fiper_episode_index
 
 from crisp_gym.util.control_type import ControlType
+from crisp_gym.util.fiper_utils import next_fiper_episode_index
 from crisp_gym.util.lerobot_features import numpy_obs_to_torch
 
 if TYPE_CHECKING:
@@ -126,7 +125,7 @@ def inference_worker(  # noqa: D417
     steps: int | None,
     inpainting: bool,
     replan_time: int,
-    fiper_recorder_config: FiperDataRecorderConfig | None = None,
+    fiper_recorder_config: FiperRolloutRecorderConfig | None = None,
     fiper_output_dir: Path | None = None,
 ):
     """Policy inference process: loads policy on GPU, receives observations via conn, returns actions, and exits on None.
@@ -189,15 +188,10 @@ def inference_worker(  # noqa: D417
     logging.info("[Inference] Warm-up complete")
 
     if fiper_recorder_config is not None:
-        scorer_artifacts = build_scorer_artifacts_for_fiper_recorder(
-            fiper_data_recorder_cfg=fiper_recorder_config,
-            policy=policy,
-            preprocessor=preprocessor,
-        )
-        policy.init_fiper_data_recorder(
+        policy.init_fiper_rollout_recorder(
             config=fiper_recorder_config,
-            scorer_artifacts=scorer_artifacts,
         )
+        logging.info("[Inference] Attached FIPER rollout recorder.")
 
     logging.info("Ready to receive information")
     while True:
@@ -210,24 +204,32 @@ def inference_worker(  # noqa: D417
             policy.reset()
             continue
         if isinstance(msg, dict) and msg.get("type") == "SAVE_FIPER":
-            if policy.fiper_data_recorder is None:
-                logging.warning("[Inference] SAVE_FIPER received but no recorder attached.")
+            if policy.fiper_rollout_recorder is None:
+                logging.warning("[Inference] SAVE_FIPER received but no rollout recorder attached.")
+                continue
+            if fiper_output_dir is None:
+                logging.warning("[Inference] SAVE_FIPER received but no output directory is configured.")
                 continue
             ep_metadata = msg.get("metadata", {}).copy()
+            rollout_type = ep_metadata["rollout_type"]
+            rollout_dir = fiper_output_dir / rollout_type
             ep_metadata.update(
-                episode=next_fiper_episode_index(output_dir=(fiper_output_dir / ep_metadata["rollout_type"])),
+                episode=next_fiper_episode_index(output_dir=rollout_dir),
                 action_prediction_horizon=policy_config.chunk_size,
                 action_execution_horizon=policy_config.n_action_steps,
                 action_batch_size=fiper_recorder_config.num_uncertainty_sequences,
             )
-            policy.fiper_data_recorder.save_data(output_dir=fiper_output_dir, episode_metadata=ep_metadata)
-            logging.info(f"[Inference] Saved FIPER data to {fiper_output_dir} (episode {ep_metadata.get('episode')}).")
+            policy.fiper_rollout_recorder.save_data(output_dir=rollout_dir, episode_metadata=ep_metadata)
+            logging.info(
+                f"[Inference] Saved FIPER rollout data to {rollout_dir} "
+                f"(episode {ep_metadata.get('episode')})."
+            )
             continue
         if isinstance(msg, dict) and msg.get("type") == "DELETE_FIPER":
-            if policy.fiper_data_recorder is None:
-                logging.warning("[Inference] DELETE_FIPER received but no recorder attached.")
+            if policy.fiper_rollout_recorder is None:
+                logging.warning("[Inference] DELETE_FIPER received but no rollout recorder attached.")
                 continue
-            policy.fiper_data_recorder.reset()
+            policy.fiper_rollout_recorder.reset()
             logging.info("[Inference] Deleted FIPER rollout buffer.")
             continue
         if not (isinstance(msg, dict) and msg.get("type") == "OBS_SEQ"):

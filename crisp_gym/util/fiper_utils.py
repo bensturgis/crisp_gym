@@ -1,37 +1,35 @@
 import logging
 import re  # noqa: D100
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
 import yaml
-from lerobot.fiper_data_recorder.configuration_fiper_data_recorder import (
-    FiperDataRecorderConfig,
-    LaplaceConfig,
-    LikelihoodODESolverConfig,
+from lerobot.fiper.data_generation.configuration_fiper_rollout_recorder import (
+    FiperRolloutRecorderConfig,
 )
+
 from crisp_gym.util import prompt
 
 logger = logging.getLogger(__name__)
 
 
-def load_fiper_recorder_config(config_path: Path) -> FiperDataRecorderConfig:  # noqa: D103
+def load_fiper_recorder_config(config_path: Path) -> FiperRolloutRecorderConfig:  # noqa: D103
     if not config_path.exists():
         logging.error(f"FIPER config file not found: {config_path}")
         raise FileNotFoundError(config_path)
 
-    data = yaml.safe_load(config_path.read_text())
-
-    # Coerce fields to expected dataclass types
-    if "scoring_metrics" in data and isinstance(data["scoring_metrics"], list):
-        data["scoring_metrics"] = tuple(data["scoring_metrics"])
-
-    if "laplace_config" in data and isinstance(data["laplace_config"], dict):
-        data["laplace_config"] = LaplaceConfig(**data["laplace_config"])
-
-    if "likelihood_ode_solver_cfg" in data and isinstance(data["likelihood_ode_solver_cfg"], dict):
-        data["likelihood_ode_solver_cfg"] = LikelihoodODESolverConfig(**data["likelihood_ode_solver_cfg"])
-
-    fiper_recorder_config = FiperDataRecorderConfig(**data)
+    data = yaml.safe_load(config_path.read_text()) or {}
+    allowed_fields = {field.name for field in fields(FiperRolloutRecorderConfig)}
+    ignored_fields = sorted(set(data) - allowed_fields)
+    if ignored_fields:
+        logger.warning(
+            "Ignoring obsolete FIPER rollout-recorder config fields: %s",
+            ", ".join(ignored_fields),
+        )
+    fiper_recorder_config = FiperRolloutRecorderConfig(
+        **{key: value for key, value in data.items() if key in allowed_fields}
+    )
 
     return fiper_recorder_config
 

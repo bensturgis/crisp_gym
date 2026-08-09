@@ -133,7 +133,7 @@ parser.add_argument(
     "--fiper-output-dir",
     type=str,
     default=None,
-    help="Directory to store FIPER rollout files.",
+    help="Directory containing FIPER rollouts/calibration and rollouts/test files.",
 )
 
 args = parser.parse_args()
@@ -197,6 +197,10 @@ if args.fiper_config is not None:
 fiper_output_dir = None
 if args.fiper_output_dir is not None:
     fiper_output_dir = Path(args.fiper_output_dir)
+if fiper_recorder_config is not None and fiper_output_dir is None:
+    parser.error("--fiper-output-dir is required when --fiper-config is set.")
+if fiper_output_dir is not None:
+    logging.info(f"FIPER rollout files will be stored under {fiper_output_dir}")
 
 ctrl_type = "cartesian" if not args.joint_control else "joint"
 env = make_env(args.env_config, control_type=ctrl_type, namespace=args.env_namespace)
@@ -220,7 +224,6 @@ recording_manager.wait_until_ready()
 # %% Set up multiprocessing for policy inference
 logging.info("Setting up multiprocessing for policy inference.")
 parent_conn, child_conn = Pipe()
-
 
 # Start inference process
 inf_proc = Process(
@@ -267,7 +270,6 @@ elif replan_time < n_act // 2:
     logging.warning(f"replan_time={replan_time} < n_action_steps/2={n_act/2} will stall.")
     exit(1)
 
-
 logging.info("Homing robot before starting with recording.")
 
 env.home()
@@ -281,13 +283,11 @@ def _drain_conn(conn):
     except (EOFError, OSError):
         pass
 
-
 def on_start():
     """Hook function to be called when starting a new episode."""
     env.reset()
     parent_conn.send("reset")
     _drain_conn(parent_conn) 
-
 
 def on_end():
     """Hook function to be called when stopping the recording."""
