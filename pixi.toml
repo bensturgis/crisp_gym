@@ -37,9 +37,6 @@ humble = { features = ["py311", "humble"] }
 humble-lerobot = { features = ["py311", "humble", "lerobot", "dev"] }  # incompatible: ROS humble needs numpy <2.0, lerobot 0.4.5 needs >=2.0
 lerobot = { features = ["py312", "lerobot"] }
 jazzy = { features = ["py312", "jazzy"] }
-humble-lerobot-groot = { features = ["py311", "humble", "lerobot-groot", "dev"] }
-humble-lerobot-dit = { features = ["py311", "humble", "lerobot-dit", "dev"] }
-humble-lerobot-dit-ralf = { features = ["py311", "humble", "lerobot-dit-ralf", "dev"] }
 jazzy-lerobot = { features = ["py312", "jazzy", "lerobot", "dev"] }
 
 # ============================================================================
@@ -80,52 +77,9 @@ numpy = ">=1.26.0"
 # === Newer version ===
 # lerobot = { git = "https://github.com/huggingface/lerobot", rev = "74690e3f56a90b6ea314afbfb3b801a3d842a005", extras = ["smolvla"]}
 # === Local version ===
-lerobot = { path = "../clare_rebuttal/lerobot/", editable = true }
-# lerobot = { path = "../clare_rebuttal/lerobot_lsy/", editable = true }
+lerobot = { path = "../lerobot/", editable = true, extras = ["smolvla"] }
+# lerobot = { path = "../lerobot/", editable = true }
 
-# ============================================================================
-# LeRobot with GR00T feature
-# ============================================================================
-[feature.lerobot-groot.dependencies]
-pynput = "*"
-pyarrow = ">=17"
-
-[feature.lerobot-groot.pypi-options.dependency-overrides]
-numpy = ">=1.26.0"
-
-[feature.lerobot-groot.pypi-dependencies]
-lerobot = { path = "../clare_rebuttal/lerobot/", editable = true, extras = ["groot"] }
-
-# ============================================================================
-# LeRobot with DiT feature. Ralf's version, using ralfroemer99/clare_dev.git and the clare_ralf branch on ZhangYi1999/lerobot.git
-# ============================================================================
-[feature.lerobot-dit-ralf.dependencies]
-pynput = "*"
-pyarrow = ">=17"
-
-[feature.lerobot-dit-ralf.pypi-options.dependency-overrides]
-numpy = ">=1.26.0"
-
-[feature.lerobot-dit-ralf.pypi-dependencies]
-lerobot = { path = "../clare_ralf/lerobot_yi_ralf/", editable = true } # clare_ralf branch!
-transformers = "==5.3.0"
-peft = { path = "../clare_ralf/peft_lsy/", editable = true }
-
-# ============================================================================
-# LeRobot with DiT feature
-# ============================================================================
-[feature.lerobot-dit.dependencies]
-pynput = "*"
-pyarrow = ">=17"
-
-[feature.lerobot-dit.pypi-options.dependency-overrides]
-numpy = ">=1.26.0"
-
-[feature.lerobot-dit.pypi-dependencies]
-lerobot = { path = "../clare_rebuttal/lerobot/", editable = true }
-transformers = "==4.57.1"
-peft = { path = "../clare_rebuttal/peft/", editable = true }
-# peft = "==0.18.1"
 
 # ============================================================================
 # ROS2 Humble (Python 3.11)
