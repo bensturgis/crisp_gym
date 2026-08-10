@@ -1,5 +1,6 @@
-min_value: 2052.0
-max_value: 3121.0
+# min_value: 1120.0
+min_value: 1000.0
+max_value: 2080.0
 joint_state_topic: /left/gripper/dynamixel_motor/joint_states
 command_topic: /left/gripper/dynamixel_motor/command
 enable_torque_service: /left/gripper/dynamixel_motor/set_torque
