@@ -18,7 +18,7 @@ scripts = [
 # ============================================================================
 [dependencies]
 compilers = "*"
-cmake = "*"
+cmake = "<4"
 pkg-config = "*"
 make = "*"
 ninja = "*"
@@ -70,6 +70,7 @@ rerun-sdk = "==0.22.1"
 
 [feature.lerobot.pypi-options.dependency-overrides]
 numpy = ">=1.26.0"
+cmake = ">=3.29.0.1,<4.0"
 
 [feature.lerobot.pypi-dependencies]
 # === Working version ===

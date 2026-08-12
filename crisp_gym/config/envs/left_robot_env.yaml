@@ -1,5 +1,9 @@
 gripper_mode: "absolute_continuous"
 
+observations_to_include_to_state:
+  - observation.state.cartesian
+  - observation.state.gripper
+
 cartesian_control_param_config: null  # Will use CRISP_CONFIG_PATH defaults
 joint_control_param_config: null      # Will use CRISP_CONFIG_PATH defaults
 
@@ -28,8 +32,8 @@ camera_configs:
   - camera_name: "wrist"
     camera_frame: "wrist_link" 
     resolution: [256, 256]
-    # camera_color_image_topic: "left_wrist_camera/color/image_rect_raw"
-    camera_color_image_topic: "left_wrist_camera/color/image_raw"
+    camera_color_image_topic: "left_wrist_camera/color/image_rect_raw"
+    # camera_color_image_topic: "left_wrist_camera/color/image_raw"
     camera_color_info_topic: "left_wrist_camera/color/camera_info"
 
 control_frequency: 15.0

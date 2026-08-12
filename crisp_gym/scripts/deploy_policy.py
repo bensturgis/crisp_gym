@@ -112,10 +112,17 @@ def main():
         "--tasks",
         type=str,
         nargs="+",
-        default=["put the bowl on the plate"],
+        default=["put the lego into the drawer"],
         help="Task descriptions for language-conditioned policies. "
         "Multiple tasks can be provided for timed switching "
-        "(e.g. --tasks 'put the lego into the drawer' 'close the drawer').",
+        "(e.g. --tasks 'put the lego into the drawer' 'close the drawer'). "
+        "Known dataset tasks include "
+        "'put the bowl on the plate' "
+        "for continuallearning/real_0_put_bowl_filtered_consolidated, "
+        "'stack the orange bowl on the other bowls' "
+        "for continuallearning/real_1_stack_bowls_filtered_consolidated, and "
+        "'put the lego into the drawer' "
+        "for continuallearning/real_4_put_lego_into_drawer_filtered_consolidated.",
     )
     parser.add_argument(
         "--switch-at",

@@ -468,7 +468,7 @@ def inference_worker(
             )
             setattr(model_config, override_key, override_value)
 
-        logger.info(f"[Inference] num_inference_steps = {model_config.num_inference_steps}")
+        logger.info(f"[Inference] num_steps = {model_config.num_steps}")
 
         # logger.info(
         #     f"[Inference] Loaded {policy.name} policy with {pretrained_path} on device {device}."
