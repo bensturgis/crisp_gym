@@ -1,8 +1,16 @@
 """Prompt utility for user input in command-line applications."""
 
 import logging
+import sys
+import termios
 
 logger = logging.getLogger(__name__)
+
+
+def drain_stdin() -> None:
+    """Clear pending terminal input before prompting."""
+    if sys.stdin.isatty():
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
 
 
 def prompt(
@@ -20,6 +28,8 @@ def prompt(
     Returns:
         str: The selected or entered string.
     """
+    drain_stdin()
+
     logger.info("-" * 40)
     if options:
         logger.info(message)
@@ -50,9 +60,10 @@ def prompt(
                 logger.info("Invalid input. Try again.")
     else:
         while True:
+            prompt_message = message
             if default is not None:
-                message += f" (Default: '{default}')"
-            logger.info(message)
+                prompt_message += f" (Default: '{default}')"
+            logger.info(prompt_message)
             logger.info("-" * 40)
             logger.info("Enter string or press Enter for default: ")
             response = input().strip()

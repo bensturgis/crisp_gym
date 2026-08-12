@@ -26,6 +26,7 @@ class RecordingManagerConfig:
     fps: int = 30
     num_episodes: int = 3
     push_to_hub: bool = False
+    fiper_recording_enabled: bool = False
 
     # System configuration
     use_sound: bool = True

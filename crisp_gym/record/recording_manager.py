@@ -279,6 +279,9 @@ class RecordingManager(ABC):
         task: str,
         on_start: Callable[[], None] | None = None,
         on_end: Callable[[], None] | None = None,
+        on_save: Callable[[], bool] | None = None,
+        on_delete: Callable[[], None] | None = None,
+        episode_len: int | None = None,
     ) -> None:
         """Record a single episode from user-provided data function.
 
@@ -287,6 +290,9 @@ class RecordingManager(ABC):
             task: The task label for the episode.
             on_start: Optional hook called at the start of the episode.
             on_end: Optional hook called at the end (before save/delete).
+            on_save: Optional hook called before saving the episode.
+            on_delete: Optional hook called before deleting the episode.
+            episode_len: Optional step count after which recording pauses automatically.
         """
         try:
             self._wait_for_start_signal()
@@ -299,6 +305,7 @@ class RecordingManager(ABC):
             on_start()
 
         logger.info("Started recording episode.")
+        steps_done = 0
 
         while self.state == "recording":
             frame_start = time.time()
@@ -313,6 +320,12 @@ class RecordingManager(ABC):
                 continue
 
             self.queue.put({"type": "FRAME", "data": (obs, action, task)})
+            steps_done += 1
+
+            if episode_len is not None and steps_done >= episode_len:
+                logger.info(f"Auto-stopping episode after {steps_done} steps.")
+                self.state = "paused"
+                break
 
             sleep_time = 1 / self.config.fps - (time.time() - frame_start)
             if sleep_time > 0:
@@ -325,11 +338,12 @@ class RecordingManager(ABC):
             logger.debug(f"Finished sleeping for {sleep_time:.3f} seconds.")
 
         logger.debug("Finished recording...")
+        logger.info(f"Number of episode steps: {steps_done}")
 
         if on_end:
             on_end()
 
-        self._handle_post_episode()
+        self._handle_post_episode(on_save=on_save, on_delete=on_delete)
 
     def _wait_for_start_signal(self) -> None:
         """Wait until the recording state is set to 'recording'."""
@@ -339,7 +353,11 @@ class RecordingManager(ABC):
                 raise StopIteration
             time.sleep(0.05)
 
-    def _handle_post_episode(self) -> None:
+    def _handle_post_episode(
+        self,
+        on_save: Callable[[], bool] | None = None,
+        on_delete: Callable[[], None] | None = None,
+    ) -> None:
         """Handle the state after recording an episode."""
         if self.state == "paused":
             logger.info("Paused. Awaiting user decision to save/delete...")
@@ -347,13 +365,25 @@ class RecordingManager(ABC):
                 time.sleep(0.5)
 
         if self.state == "to_be_saved":
-            logger.info("Saving current episode.")
-            self.queue.put({"type": "SAVE_EPISODE"})
-            self.episode_count += 1
-            self._set_to_wait()
+            allow_save = True
+            if on_save is not None:
+                allow_save = on_save()
+            if allow_save:
+                logger.info("Saving current episode.")
+                self.queue.put({"type": "SAVE_EPISODE"})
+                self.episode_count += 1
+                self._set_to_wait()
+            else:
+                logger.info("Converting save to delete per gating rules.")
+                self.queue.put({"type": "DELETE_EPISODE"})
+                if on_delete:
+                    on_delete()
+                self._set_to_wait()
         elif self.state == "to_be_deleted":
             logger.info("Deleting current episode.")
             self.queue.put({"type": "DELETE_EPISODE"})
+            if on_delete:
+                on_delete()
             self._set_to_wait()
         elif self.state == "exit":
             pass

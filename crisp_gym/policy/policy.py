@@ -33,6 +33,14 @@ class Policy(ABC):
         """Shutdown the policy and release resources."""
         pass
 
+    def save_fiper_rollout(self, metadata: dict[str, Any]) -> None:
+        """Persist FIPER rollout data if the policy supports it."""
+        raise NotImplementedError(f"{type(self).__name__} does not support FIPER recording.")
+
+    def delete_fiper_rollout(self) -> None:
+        """Discard FIPER rollout data if the policy supports it."""
+        raise NotImplementedError(f"{type(self).__name__} does not support FIPER recording.")
+
 
 def register_policy(name: str) -> Callable:
     """Decorator to register a Policy class with a given name."""

@@ -19,6 +19,7 @@ from typing_extensions import override
 
 from crisp_gym.envs.manipulator_env import ManipulatorBaseEnv
 from crisp_gym.policy.policy import Action, Observation, Policy, register_policy
+from crisp_gym.util.fiper_utils import next_fiper_episode_index
 from crisp_gym.util.lerobot_features import concatenate_state_features, numpy_obs_to_torch
 from crisp_gym.util.setup_logger import setup_logging
 
@@ -52,6 +53,8 @@ class LerobotPolicy(Policy):
         peft_path: str | None = None,
         profile: bool = False,
         repo_id: str | None = None,
+        fiper_recorder_config: Any | None = None,
+        fiper_output_dir: Path | str | None = None,
     ):
         """Initialize the policy.
 
@@ -60,10 +63,16 @@ class LerobotPolicy(Policy):
             env (ManipulatorBaseEnv): The environment in which the policy will be applied.
             overrides (dict | None): Optional overrides for the policy configuration.
             task (str | None): Task description for language-conditioned policies.
+            peft_path (str | None): Optional PEFT adapter path.
+            profile (bool): Whether to collect CLARE inference profile data.
+            repo_id (str | None): Optional dataset repository ID used for profile filenames.
+            fiper_recorder_config (Any | None): Optional FIPER rollout recorder config.
+            fiper_output_dir (Path | str | None): Optional root directory for FIPER rollouts.
         """
         self.env = env
         self.overrides = overrides if overrides is not None else {}
         self.task = task
+        self.fiper_recording_enabled = fiper_recorder_config is not None
 
         ctx = multiprocessing.get_context("spawn")
         self.parent_conn, self.child_conn = ctx.Pipe()
@@ -84,6 +93,8 @@ class LerobotPolicy(Policy):
                 "peft_path": peft_path,
                 "profile": profile,
                 "repo_id": repo_id,
+                "fiper_recorder_config": fiper_recorder_config,
+                "fiper_output_dir": Path(fiper_output_dir) if fiper_output_dir is not None else None,
             },
             daemon=True,
         )
@@ -148,9 +159,31 @@ class LerobotPolicy(Policy):
         self.parent_conn.send(None)
         self.inf_proc.join()
 
+    @override
+    def save_fiper_rollout(self, metadata: dict[str, Any]) -> None:
+        """Request that the inference worker persist buffered FIPER rollout data."""
+        if not self.fiper_recording_enabled:
+            raise RuntimeError("FIPER rollout recording is not enabled for this policy.")
+        self.parent_conn.send({"type": "SAVE_FIPER", "metadata": metadata})
 
-def _save_profile_data(logger, step_profiles, device, adapter_vram=None, disc_vram=None,
-                       backbone_vram_mb=0.0, total_param_vram_mb=0.0, repo_id=None):
+    @override
+    def delete_fiper_rollout(self) -> None:
+        """Request that the inference worker discard buffered FIPER rollout data."""
+        if not self.fiper_recording_enabled:
+            return
+        self.parent_conn.send({"type": "DELETE_FIPER"})
+
+
+def _save_profile_data(
+    logger: logging.Logger,
+    step_profiles: list[dict[str, Any]],
+    device: torch.device,
+    adapter_vram: dict[str, float] | None = None,
+    disc_vram: dict[str, float] | None = None,
+    backbone_vram_mb: float = 0.0,
+    total_param_vram_mb: float = 0.0,
+    repo_id: str | None = None,
+):
     """Save profiling data to JSON, CSV, and Markdown in ./outputs/clare_profile/."""
     if not step_profiles:
         return
@@ -260,7 +293,7 @@ def _save_profile_data(logger, step_profiles, device, adapter_vram=None, disc_vr
                       "all_discriminators_total_ms", "all_discriminators_mean_ms",
                       "all_adapters_total_ms", "all_adapters_mean_ms"]
     md_lines = [
-        f"# CLARE Inference Profile Report",
+        "# CLARE Inference Profile Report",
         f"**Repo ID:** {repo_id or 'N/A'} | **Date:** {date_str} | **Steps:** {n}",
         "",
         "## Timing Summary",
@@ -358,13 +391,15 @@ def _save_profile_data(logger, step_profiles, device, adapter_vram=None, disc_vr
 def inference_worker(
     conn: Connection,
     pretrained_path: str,
-    observation_space,
+    observation_space: Any,
     env_metadata: dict,
     overrides: dict | None = None,
     task: str | None = None,
     peft_path: str | None = None,
     profile: bool = False,
     repo_id: str | None = None,
+    fiper_recorder_config: Any | None = None,
+    fiper_output_dir: Path | None = None,
 ):  # noqa: ANN001
     """Policy inference process: loads policy on GPU, receives observations via conn, returns actions, and exits on None.
 
@@ -375,6 +410,11 @@ def inference_worker(
         env_metadata (dict): The environment metadata (pre-extracted for spawn compatibility).
         overrides (dict | None): Optional overrides for the policy configuration.
         task (str | None): Task description for language-conditioned policies.
+        peft_path (str | None): Optional PEFT adapter path.
+        profile (bool): Whether to collect CLARE inference profile data.
+        repo_id (str | None): Optional dataset repository ID used for profile filenames.
+        fiper_recorder_config (Any | None): Optional FIPER rollout recorder config.
+        fiper_output_dir (Path | None): Optional root directory for FIPER rollouts.
     """
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -411,7 +451,6 @@ def inference_worker(
         logger.info("[Inference] Loading policy...")
         policy_cls = get_policy_class(train_config.policy.type)
         policy = policy_cls.from_pretrained(pretrained_path)
-        policy_name = policy.name
 
         if peft_path is not None:
             from peft import PeftConfig, PeftModel
@@ -480,6 +519,18 @@ def inference_worker(
 
         logger.info("[Inference] Warm-up complete")
 
+        fiper_recorder_host = None
+        if fiper_recorder_config is not None:
+            fiper_recorder_host = _get_fiper_recorder_host(policy)
+            if fiper_recorder_host is None:
+                logger.warning(
+                    "[Inference] FIPER config was provided, but this policy does not expose "
+                    "init_fiper_rollout_recorder()."
+                )
+            else:
+                fiper_recorder_host.init_fiper_rollout_recorder(config=fiper_recorder_config)
+                logger.info("[Inference] Attached FIPER rollout recorder.")
+
         # Enable CLARE profiling after warmup
         clare_layers = []
         adapter_vram = {}  # {layer_i/adapter_j: vram_mb}
@@ -546,6 +597,19 @@ def inference_worker(
                 if USE_LEROBOT_PROCESSORS:
                     preprocessor.reset()
                     postprocessor.reset()
+                continue
+            if isinstance(obs_raw, dict) and obs_raw.get("type") == "SAVE_FIPER":
+                _save_fiper_rollout(
+                    recorder_host=fiper_recorder_host,
+                    output_dir=fiper_output_dir,
+                    metadata=obs_raw.get("metadata", {}),
+                    model_config=model_config,
+                    recorder_config=fiper_recorder_config,
+                    logger=logger,
+                )
+                continue
+            if isinstance(obs_raw, dict) and obs_raw.get("type") == "DELETE_FIPER":
+                _delete_fiper_rollout(recorder_host=fiper_recorder_host, logger=logger)
                 continue
 
             with torch.inference_mode():
@@ -626,6 +690,92 @@ def inference_worker(
 
     conn.close()
     logger.info("[Inference] Worker shutting down")
+
+
+def _get_fiper_recorder_host(policy: Any) -> Any | None:
+    """Return the object that owns the FIPER rollout recorder API."""
+    if hasattr(policy, "init_fiper_rollout_recorder"):
+        return policy
+
+    if hasattr(policy, "get_base_model"):
+        base_model = policy.get_base_model()
+        if hasattr(base_model, "init_fiper_rollout_recorder"):
+            return base_model
+
+    return None
+
+
+def _save_fiper_rollout(
+    recorder_host: Any | None,
+    output_dir: Path | None,
+    metadata: dict[str, Any],
+    model_config: Any,
+    recorder_config: Any | None,
+    logger: logging.Logger,
+) -> None:
+    """Persist buffered FIPER rollout data from the inference worker."""
+    if recorder_host is None:
+        logger.warning("[Inference] SAVE_FIPER received but no rollout recorder is attached.")
+        return
+
+    recorder = getattr(recorder_host, "fiper_rollout_recorder", None)
+    if recorder is None:
+        logger.warning("[Inference] SAVE_FIPER received but no rollout recorder is attached.")
+        return
+
+    if output_dir is None:
+        logger.warning("[Inference] SAVE_FIPER received but no output directory is configured.")
+        return
+
+    ep_metadata = metadata.copy()
+    rollout_type = ep_metadata.get("rollout_type")
+    if rollout_type is None:
+        logger.warning("[Inference] SAVE_FIPER metadata is missing rollout_type.")
+        return
+
+    rollout_dir = output_dir / rollout_type
+    ep_metadata.update(
+        episode=next_fiper_episode_index(output_dir=rollout_dir),
+        action_prediction_horizon=_first_config_value(
+            model_config,
+            "chunk_size",
+            "horizon",
+            "n_action_steps",
+        ),
+        action_execution_horizon=_first_config_value(model_config, "n_action_steps"),
+    )
+    action_batch_size = getattr(recorder_config, "num_uncertainty_sequences", None)
+    if action_batch_size is not None:
+        ep_metadata["action_batch_size"] = action_batch_size
+
+    recorder.save_data(output_dir=rollout_dir, episode_metadata=ep_metadata)
+    logger.info(
+        f"[Inference] Saved FIPER rollout data to {rollout_dir} "
+        f"(episode {ep_metadata.get('episode')})."
+    )
+
+
+def _delete_fiper_rollout(recorder_host: Any | None, logger: logging.Logger) -> None:
+    """Discard buffered FIPER rollout data from the inference worker."""
+    if recorder_host is None:
+        logger.warning("[Inference] DELETE_FIPER received but no rollout recorder is attached.")
+        return
+
+    recorder = getattr(recorder_host, "fiper_rollout_recorder", None)
+    if recorder is None:
+        logger.warning("[Inference] DELETE_FIPER received but no rollout recorder is attached.")
+        return
+
+    recorder.reset()
+    logger.info("[Inference] Deleted FIPER rollout buffer.")
+
+
+def _first_config_value(config: Any, *names: str) -> Any:
+    for name in names:
+        value = getattr(config, name, None)
+        if value is not None:
+            return value
+    return None
 
 
 def _check_dataset_metadata(

@@ -14,6 +14,7 @@ from crisp_gym.policy.policy import list_policy_configs
 from crisp_gym.record.evaluate import Evaluator
 from crisp_gym.record.recording_manager import make_recording_manager
 from crisp_gym.util import prompt
+from crisp_gym.util.fiper_utils import collect_fiper_metadata, load_fiper_recorder_config
 from crisp_gym.util.lerobot_features import get_features
 from crisp_gym.util.setup_logger import setup_logging
 
@@ -139,6 +140,26 @@ def main():
         help="Enable inference profiling (per-adapter/discriminator timing and VRAM usage). "
         "Results saved to ./crisp_gym/clare_profile/ as JSON and CSV.",
     )
+    parser.add_argument(
+        "--episode-length",
+        "--episode_length",
+        dest="episode_length",
+        type=int,
+        default=None,
+        help="Auto-stop an episode after this many environment steps.",
+    )
+    parser.add_argument(
+        "--fiper-config",
+        type=str,
+        default=None,
+        help="Path to a FIPER data recorder config file.",
+    )
+    parser.add_argument(
+        "--fiper-output-dir",
+        type=str,
+        default=None,
+        help="Directory containing FIPER rollouts/calibration and rollouts/test files.",
+    )
 
     args = parser.parse_args()
     logger = logging.getLogger(__name__)
@@ -225,6 +246,17 @@ def main():
     else:
         evaluation_file = "evaluation_results.csv"
 
+    fiper_recorder_config = None
+    if args.fiper_config is not None:
+        fiper_recorder_config = load_fiper_recorder_config(config_path=Path(args.fiper_config))
+        logger.info(f"Loaded FIPER config from {args.fiper_config}")
+
+    fiper_output_dir = Path(args.fiper_output_dir) if args.fiper_output_dir is not None else None
+    if fiper_recorder_config is not None and fiper_output_dir is None:
+        parser.error("--fiper-output-dir is required when --fiper-config is set.")
+    if fiper_output_dir is not None:
+        logger.info(f"FIPER rollout files will be stored under {fiper_output_dir}")
+
     policy = None
     try:
         ctrl_type = "cartesian" if not args.joint_control else "joint"
@@ -244,6 +276,7 @@ def main():
             fps=args.fps,
             resume=args.resume,
             push_to_hub=args.push_to_hub,
+            fiper_recording_enabled=fiper_recorder_config is not None,
         )
         recording_manager.wait_until_ready()
 
@@ -257,7 +290,17 @@ def main():
             peft_path=args.peft_path,
             profile=args.profile,
             repo_id=args.repo_id,
+            fiper_recorder_config=fiper_recorder_config,
+            fiper_output_dir=fiper_output_dir,
         )
+        if fiper_recorder_config is not None and not getattr(
+            policy,
+            "fiper_recording_enabled",
+            False,
+        ):
+            raise RuntimeError(
+                "FIPER rollout recording is currently supported only by lerobot_policy."
+            )
 
         logger.info("Homing robot before starting with recording.")
 
@@ -302,6 +345,21 @@ def main():
             if recording_manager.state != "exit":
                 evaluator.evaluate(episode=recording_manager.episode_count)
 
+        def on_save_fiper() -> bool:
+            """Collect FIPER metadata and ask the policy worker to save rollout data."""
+            metadata = collect_fiper_metadata()
+            if metadata is None:
+                return False
+            policy.save_fiper_rollout(metadata)
+            return True
+
+        def on_delete_fiper() -> None:
+            """Ask the policy worker to discard buffered FIPER rollout data."""
+            policy.delete_fiper_rollout()
+
+        fiper_on_save = on_save_fiper if fiper_recorder_config is not None else None
+        fiper_on_delete = on_delete_fiper if fiper_recorder_config is not None else None
+
         with evaluator.start_eval(overwrite=True, activate=args.evaluate):
             with recording_manager:
                 while not recording_manager.done():
@@ -314,6 +372,9 @@ def main():
                         task=args.tasks[0],
                         on_start=on_start,
                         on_end=on_end,
+                        on_save=fiper_on_save,
+                        on_delete=fiper_on_delete,
+                        episode_len=args.episode_length,
                     )
 
                     logger.info("Episode finished.")
