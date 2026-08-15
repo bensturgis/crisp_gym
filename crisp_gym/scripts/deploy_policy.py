@@ -134,20 +134,6 @@ def main():
         "(e.g. --switch-at 2.0 means switch to the 2nd task at t=2s).",
     )
     parser.add_argument(
-        "--peft-path",
-        type=str,
-        default=None,
-        help="Path to a PEFT adapter (local directory or HuggingFace repo ID). "
-        "If provided, the base model from --path is loaded first, then the adapter is applied.",
-    )
-    parser.add_argument(
-        "--profile",
-        action="store_true",
-        default=False,
-        help="Enable inference profiling (per-adapter/discriminator timing and VRAM usage). "
-        "Results saved to ./crisp_gym/clare_profile/ as JSON and CSV.",
-    )
-    parser.add_argument(
         "--episode-length",
         "--episode_length",
         dest="episode_length",
@@ -294,9 +280,6 @@ def main():
             pretrained_path=args.path,
             env=env,
             task=args.tasks[0],
-            peft_path=args.peft_path,
-            profile=args.profile,
-            repo_id=args.repo_id,
             fiper_recorder_config=fiper_recorder_config,
             fiper_output_dir=fiper_output_dir,
         )
