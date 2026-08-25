@@ -105,7 +105,7 @@ class LerobotPolicy(Policy):
             obs_raw: Observation = self.env.get_obs()
 
             obs_raw["observation.state"] = concatenate_state_features(obs_raw)
-            obs_raw["observation.state"][2] -= 0.021     # DEBUG: compensate for force-torque sensor
+            obs_raw["observation.state"][2] -= 0.019     # DEBUG: compensate for force-torque sensor
 
             if self.task is not None:
                 obs_raw["task"] = self.task
@@ -114,8 +114,8 @@ class LerobotPolicy(Policy):
             action: Action = self.parent_conn.recv().squeeze(0).to("cpu").numpy()
             action[3:5] *= 0.1  # DEBUG: no orientation command
             # if obs_raw["observation.state"][2] <= 0.095:     # DEBUG: avoid driving into the table
-            if obs_raw["observation.state"][2] <= 0.085:        # For task 2
-                action[2] = max(action[2], 0.0)
+            # if obs_raw["observation.state"][2] <= 0.085:        # For task 2
+            #     action[2] = max(action[2], 0.0)
             # if action[6] <= 0.2 or (obs_raw["observation.state"][6] >= 0.6 and action[6] <= 0.4):              # Tasks 0 and 1
             # if action[6] <= 0.2:
             #     action[6] = 0.01

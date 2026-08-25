@@ -1,7 +1,7 @@
 #!/bin/bash
 
 export GIT_LFS_SKIP_SMUDGE=1
-export SVT_LOG=1
+export SVT_LOG=0
 
 # Check if .pixi.sh exists
 if [ ! -f "scripts/set_env.sh" ]; then

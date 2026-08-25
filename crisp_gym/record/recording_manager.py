@@ -2,6 +2,7 @@
 
 import logging
 import multiprocessing as mp
+import os
 import subprocess
 import threading
 import time
@@ -167,6 +168,7 @@ class RecordingManager(ABC):
 
     def _writer_proc(self):
         """Process to write data to the dataset."""
+        os.environ["SVT_LOG"] = "0"
         logger.info("Starting dataset writer process.")
         dataset = self._create_dataset()
         self.dataset_ready.set()
@@ -306,6 +308,8 @@ class RecordingManager(ABC):
 
         logger.info("Started recording episode.")
         steps_done = 0
+        episode_start = time.time()
+        last_progress_log = episode_start
 
         while self.state == "recording":
             frame_start = time.time()
@@ -321,6 +325,14 @@ class RecordingManager(ABC):
 
             self.queue.put({"type": "FRAME", "data": (obs, action, task)})
             steps_done += 1
+            elapsed = time.time() - episode_start
+
+            if time.time() - last_progress_log >= 1.0:
+                logger.info(
+                    f"Episode progress: {steps_done} steps, {elapsed:.1f}s elapsed "
+                    f"(task: {task!r})"
+                )
+                last_progress_log = time.time()
 
             if episode_len is not None and steps_done >= episode_len:
                 logger.info(f"Auto-stopping episode after {steps_done} steps.")

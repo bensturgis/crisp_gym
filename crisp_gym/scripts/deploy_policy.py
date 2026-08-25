@@ -111,7 +111,7 @@ def main():
         "--tasks",
         type=str,
         nargs="+",
-        default=['stack the orange bowl on the other bowls'],
+        default=['put the lego into the drawer'],
         help="Task descriptions for language-conditioned policies. "
         "Known dataset tasks include "
         "'put the bowl on the plate' "
